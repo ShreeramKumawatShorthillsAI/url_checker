@@ -43,6 +43,13 @@ class URLChecker:
 
     def process_urls(self, url_list):
         statuses = []
+        total_urls = len(url_list)
+        completed_urls = 0
+
+        # Create a progress bar
+        progress_bar = st.progress(0)
+        progress_text = st.empty()
+
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {executor.submit(self.check_url, url): url for url in url_list if url}
             for i, future in enumerate(as_completed(futures)):
@@ -52,9 +59,13 @@ class URLChecker:
                     status = f"Failed - {str(e)}"
                 statuses.append(status)
 
-                # Print progress in batches of 10 or at the end
-                if (i + 1) % 10 == 0 or i == len(url_list) - 1:
-                    st.write(f"Processed {i + 1} out of {len(url_list)} URLs")
+                completed_urls += 1
+                percentage_completed = (completed_urls / total_urls) * 100
+
+                # Update the progress bar and percentage text
+                progress_bar.progress(int(percentage_completed))
+                progress_text.text(f"Processing: {percentage_completed:.2f}% complete")
+
         return statuses
 
 class JSONReader:
@@ -97,12 +108,18 @@ class ExcelSaver:
         self.output_file = output_file
 
     def save_to_excel(self, image_models, image_urls, image_statuses, attachment_models, attachment_urls, attachment_statuses):
+        # Create a DataFrame for image URLs
         df_images = pd.DataFrame({"Model_name": image_models, "URL": image_urls, "Status": image_statuses})
-        df_attachments = pd.DataFrame({"Model_name": attachment_models, "URL": attachment_urls, "Status": attachment_statuses})
 
+        # Create a writer object to save the Excel file
         with pd.ExcelWriter(self.output_file) as writer:
+            # Save image URLs to the Excel file
             df_images.to_excel(writer, sheet_name="image_status", index=False)
-            df_attachments.to_excel(writer, sheet_name="pdf_status", index=False)
+
+            # If there are any attachment URLs, save them to a separate sheet
+            if attachment_urls:
+                df_attachments = pd.DataFrame({"Model_name": attachment_models, "URL": attachment_urls, "Status": attachment_statuses})
+                df_attachments.to_excel(writer, sheet_name="pdf_status", index=False)
 
         st.success(f"Results saved to {self.output_file}")
 
@@ -139,6 +156,9 @@ if uploaded_files:
                 json_reader = JSONReader(json_file)
                 image_models, image_urls, attachment_models, attachment_urls = json_reader.read_urls()
 
+                total_urls = len(image_urls) + len(attachment_urls)
+                st.write(f"Total URLs to check: {total_urls}")
+
                 if not image_urls and not attachment_urls:
                     st.warning(f"No URLs found in {os.path.basename(json_file)}.")
                     continue
@@ -147,9 +167,12 @@ if uploaded_files:
                 st.write("<h4>Checking image URLs...</h4>", unsafe_allow_html=True)
                 image_statuses = url_checker.process_urls(image_urls)
 
-                # Process attachment URLs
-                st.write("<h4>Checking attachment URLs...</h4>", unsafe_allow_html=True)
-                attachment_statuses = url_checker.process_urls(attachment_urls)
+                # Process attachment URLs if they exist
+                if attachment_urls:
+                    st.write("<h4>Checking attachment URLs...</h4>", unsafe_allow_html=True)
+                    attachment_statuses = url_checker.process_urls(attachment_urls)
+                else:
+                    attachment_statuses = []
 
                 # Save results to an in-memory Excel file
                 output_file = os.path.splitext(os.path.basename(json_file))[0] + "_results.xlsx"
